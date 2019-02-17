@@ -1,5 +1,5 @@
 ;****************** main.s ***************
-; Program written by: ***Your Names**update this***
+; Program written by: Teddy Hsieh and Jonas Traweek
 ; Date Created: 2/4/2017
 ; Last Modified: 1/18/2019
 ; Brief description of the program
@@ -47,6 +47,7 @@ SYSCTL_RCGCGPIO_R  EQU 0x400FE608
        AREA    DATA, ALIGN=2
 ;global variables go here
 
+
        AREA    |.text|, CODE, READONLY, ALIGN=2
        THUMB
        EXPORT  Start
@@ -54,19 +55,76 @@ Start
  ; TExaS_Init sets bus clock at 80 MHz
      BL  TExaS_Init ; voltmeter, scope on PD3
  ; Initialization goes here
+	LDR R0, =SYSCTL_RCGCGPIO_R
+	LDR R1, [R0]
+	ORR R1, #0x30
+	STR R1, [R0]
+	
+	NOP
+	NOP
+	
+	;DEN
+	LDR R0, =GPIO_PORTE_DEN_R
+	LDR R1, [R0]
+	ORR R1, #0x0C
+	STR R1, [R0]
+	LDR R0, =GPIO_PORTF_DEN_R
+	LDR R1, [R0]
+	ORR R1, #0x10
+	STR R1, [R0]
+	
+	;DIR: PE3 OUT, PF4/PE2 IN
+	LDR R0, =GPIO_PORTE_DIR_R
+	LDR R1, [R0]
+	ORR R1, #0x08
+	AND R1, #0xFB
+	STR R1, [R0]
+	LDR R0, =GPIO_PORTF_DIR_R
+	LDR R1, [R0]
+	AND R1, #0xEF
+	STR R1, [R0]
 
-	ldr r0,= SYSCTL_RCGCGPIO_R
-	ldr r1,[r0]
-	orr r1, #0x30
+	;
 
-     CPSIE  I    ; TExaS voltmeter, scope runs on interrupts
+    CPSIE  I    ; TExaS voltmeter, scope runs on interrupts
+	 
+
 loop  
 ; main engine goes here
 
-   
+	;Set PE3 high
+	LDR R0, =GPIO_PORTE_DATA_R
+	LDR R1, [R0]
+	ORR R1, #0x08
+	STR R1, [R0]
+	
+	;800 waits ~= 40us
+	;150ms ~= 3,000,000waits
+	MOV R2, #3000
+	MOV R3, #1000
+	MUL R2, R2, R3
+	BL WAIT
+	
+	
+	;clear PE3
+	
+	AND R1, #0xF7
+	STR R1, [R0]
+	
+	;7 mil to wait 350ms
+	MOV R2, #7000
+	MOV R3, #1000
+	MUL R2, R2, R3
+	BL WAIT
      B    loop
-
       
+	  
+	  
+WAIT
+	SUBS R2,R2,#0x01
+	BNE WAIT
+	BX LR
+	
      ALIGN      ; make sure the end of this section is aligned
      END        ; end of file
 
