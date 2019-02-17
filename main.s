@@ -1,5 +1,5 @@
 ;****************** main.s ***************
-; Program written by: ***Your Names**update this***
+; Program written by: Teddy Hsieh and Jonas Traweek
 ; Date Created: 2/4/2017
 ; Last Modified: 1/18/2019
 ; Brief description of the program
@@ -47,6 +47,7 @@ SYSCTL_RCGCGPIO_R  EQU 0x400FE608
        AREA    DATA, ALIGN=2
 ;global variables go here
 
+
        AREA    |.text|, CODE, READONLY, ALIGN=2
        THUMB
        EXPORT  Start
@@ -55,9 +56,6 @@ Start
      BL  TExaS_Init ; voltmeter, scope on PD3
  ; Initialization goes here
 
-	ldr r0,= SYSCTL_RCGCGPIO_R
-	ldr r1,[r0]
-	orr r1, #0x30
 
      CPSIE  I    ; TExaS voltmeter, scope runs on interrupts
 loop  
