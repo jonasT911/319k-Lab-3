@@ -14,7 +14,7 @@
 ;   2) The system starts with the the LED toggling at 2Hz,
 ;      which is 2 times per second with a duty-cycle of 30%.
 ;      Therefore, the LED is ON for 150ms and off for 350 ms.
-;   3) When the button (PE1) is pressed-and-released increase
+;   3) When the button (PE2) is pressed-and-released increase
 ;      the duty cycle by 20% (modulo 100%). Therefore for each
 ;      press-and-release the duty cycle changes from 30% to 70% to 70%
 ;      to 90% to 10% to 30% so on
@@ -46,7 +46,7 @@ SYSCTL_RCGCGPIO_R  EQU 0x400FE608
        THUMB
        AREA    DATA, ALIGN=2
 ;global variables go here
-
+DUTY_CYCLE SPACE 1
 
        AREA    |.text|, CODE, READONLY, ALIGN=2
        THUMB
@@ -55,6 +55,12 @@ Start
  ; TExaS_Init sets bus clock at 80 MHz
      BL  TExaS_Init ; voltmeter, scope on PD3
  ; Initialization goes here
+	;Set DUTY_CYCLE
+	LDR R0, =DUTY_CYCLE
+	MOV R1, #1
+	STRB R1, [R0]
+	
+	;clock
 	LDR R0, =SYSCTL_RCGCGPIO_R
 	LDR R1, [R0]
 	ORR R1, #0x30
@@ -84,7 +90,6 @@ Start
 	AND R1, #0xEF
 	STR R1, [R0]
 
-	;
 
     CPSIE  I    ; TExaS voltmeter, scope runs on interrupts
 	 
@@ -98,16 +103,19 @@ loop
 	ORR R1, #0x08
 	STR R1, [R0]
 	
-	;800 waits ~= 40us
-	;150ms ~= 3,000,000waits
-	MOV R2, #3000
+	;%cycle = (2N + 1) * 10
+	LDR R2, =DUTY_CYCLE
+	LDR R2, [R2]
+	ADD R2, R2, #1
 	MOV R3, #1000
 	MUL R2, R2, R3
+	
 	BL WAIT
 	
 	
 	;clear PE3
-	
+	LDR R0, =GPIO_PORTE_DATA_R
+	LDR R1, [R0]
 	AND R1, #0xF7
 	STR R1, [R0]
 	
@@ -119,11 +127,37 @@ loop
      B    loop
       
 	  
-	  
+	;wait for time specified by R2
+	;exits to RELEASED when PE2 is pressed
 WAIT
+	LDR R0, =GPIO_PORTE_DATA_R
+	LDR R1, [R0]
+	AND R1, R1, #0x04
+	CMP R1, #0
+	BNE RELEASED
+	
 	SUBS R2,R2,#0x01
 	BNE WAIT
 	BX LR
+
+RELEASED
+	;loop until PE2 is released
+	LDR R1, [R0] ;R0 guaranteed to contain [GPIO_PORTE_DATA_R]
+	AND R1, R1, #0x04
+	CMP R1, #0
+	BNE RELEASED
+	
+	;increment DUTY_CYCLE upon release
+	LDR R0, = DUTY_CYCLE
+	LDR R1, [R0]
+	ADD R1, R1, #1
+	CMP R1, #5	;mod 5
+	BNE R_EXIT
+	MOV R1, #0
+
+R_EXIT
+	STRB R1, [R0]
+	B loop	;restart
 	
      ALIGN      ; make sure the end of this section is aligned
      END        ; end of file
