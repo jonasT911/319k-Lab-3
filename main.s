@@ -41,23 +41,26 @@ GPIO_PORTF_LOCK_R  EQU 0x40025520
 GPIO_PORTF_CR_R    EQU 0x40025524
 GPIO_LOCK_KEY      EQU 0x4C4F434B  ; Unlocks the GPIO_CR register
 SYSCTL_RCGCGPIO_R  EQU 0x400FE608
+	
+TIME_UNIT		   EQU 0x00058BD0  ; number of WAIT cycles for 50ms
 
        IMPORT  TExaS_Init
        THUMB
        AREA    DATA, ALIGN=2
 ;global variables go here
-DUTY_CYCLE SPACE 1
-
+DUTY_CYCLE SPACE 1	;keeps track of duty cycle %.
+TIME_R RN R2		;keeps #cycles of wait to run
+UNIT_R RN R3		; = TIME_UNIT
        AREA    |.text|, CODE, READONLY, ALIGN=2
        THUMB
        EXPORT  Start
 Start
  ; TExaS_Init sets bus clock at 80 MHz
      BL  TExaS_Init ; voltmeter, scope on PD3
- ; Initialization goes here
-	;Set DUTY_CYCLE
+ 
+	;Initialize DUTY_CYCLE to 30%
 	LDR R0, =DUTY_CYCLE
-	MOV R1, #1
+	MOV R1, #0x03
 	STRB R1, [R0]
 	
 	;clock
@@ -90,12 +93,9 @@ Start
 	AND R1, #0xEF
 	STR R1, [R0]
 
-
     CPSIE  I    ; TExaS voltmeter, scope runs on interrupts
-	 
-
+	LDR UNIT_R, = TIME_UNIT
 loop  
-; main engine goes here
 
 	;Set PE3 high
 	LDR R0, =GPIO_PORTE_DATA_R
@@ -103,15 +103,12 @@ loop
 	ORR R1, #0x08
 	STR R1, [R0]
 	
-	;%cycle = (2N + 1) * 10
-	LDR R2, =DUTY_CYCLE
-	LDR R2, [R2]
-	ADD R2, R2, #1
-	MOV R3, #1000
-	MUL R2, R2, R3
-	
+	;wait time = TIME_UNIT * DUTY_CYCLE
+	LDR TIME_R, =DUTY_CYCLE
+	LDR TIME_R, [TIME_R]
+	LDR UNIT_R, =TIME_UNIT
+	MUL TIME_R, TIME_R, UNIT_R
 	BL WAIT
-	
 	
 	;clear PE3
 	LDR R0, =GPIO_PORTE_DATA_R
@@ -119,24 +116,27 @@ loop
 	AND R1, #0xF7
 	STR R1, [R0]
 	
-	;7 mil to wait 350ms
-	MOV R2, #7000
-	MOV R3, #1000
-	MUL R2, R2, R3
+	;wait time = TIME_UNIT * (10 - DUTY_CYCLE)
+	LDR TIME_R, =DUTY_CYCLE
+	LDR TIME_R, [TIME_R]
+	RSB TIME_R, TIME_R, #0x0A
+	LDR UNIT_R, =TIME_UNIT
+	MUL TIME_R, TIME_R, UNIT_R
 	BL WAIT
+	
      B    loop
       
 	  
-	;wait for time specified by R2
+	;wait for time specified by TIME_R
 	;exits to RELEASED when PE2 is pressed
 WAIT
 	LDR R0, =GPIO_PORTE_DATA_R
 	LDR R1, [R0]
 	AND R1, R1, #0x04
-	CMP R1, #0
+	CMP R1, #0x00
 	BNE RELEASED
 	
-	SUBS R2,R2,#0x01
+	SUBS TIME_R, TIME_R, #0x01
 	BNE WAIT
 	BX LR
 
@@ -144,16 +144,16 @@ RELEASED
 	;loop until PE2 is released
 	LDR R1, [R0] ;R0 guaranteed to contain [GPIO_PORTE_DATA_R]
 	AND R1, R1, #0x04
-	CMP R1, #0
+	CMP R1, #0x00
 	BNE RELEASED
 	
 	;increment DUTY_CYCLE upon release
 	LDR R0, = DUTY_CYCLE
 	LDR R1, [R0]
-	ADD R1, R1, #1
-	CMP R1, #5	;mod 5
-	BNE R_EXIT
-	MOV R1, #0
+	ADD R1, R1, #2
+	CMP R1, #0x09	;mod 10
+	BLS R_EXIT
+	MOV R1, #0x01
 
 R_EXIT
 	STRB R1, [R0]
