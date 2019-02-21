@@ -43,7 +43,7 @@ GPIO_LOCK_KEY      EQU 0x4C4F434B  ; Unlocks the GPIO_CR register
 SYSCTL_RCGCGPIO_R  EQU 0x400FE608
 	
 TIME_UNIT		   EQU 0x00058BD0  ; number of WAIT cycles for 50ms
-B_TIME_UNIT		   EQU 0x00005000  ; number of B_WAIT cycles for 20us
+B_TIME_UNIT		   EQU 0x00000500  ; number of B_WAIT cycles for 20us
 B_STAGE_CYCLE	   EQU 0x00000001  ; iterations per breathe stage
 
        IMPORT  TExaS_Init
@@ -273,4 +273,3 @@ B_WAIT
 	
      ALIGN      ; make sure the end of this section is aligned
      END        ; end of file
-
