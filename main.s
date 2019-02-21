@@ -22,7 +22,7 @@
 ;      a) Be creative and play around with what "breathing" means.
 ;         An example of "breathing" is most computers power LED in sleep mode
 ;         (e.g., https://www.youtube.com/watch?v=ZT6siXyIjvQ).
-;      b) When (PF4) is released while in breathing mode, resume blinking at 2Hz.
+;      b) When (PF4) is released while in breathing mode, resume BREATHEing at 2Hz.
 ;         The duty cycle can either match the most recent duty-
 ;         cycle or reset to 30%.
 ;      TIP: debugging the breathing LED algorithm using the real board.
@@ -43,14 +43,20 @@ GPIO_LOCK_KEY      EQU 0x4C4F434B  ; Unlocks the GPIO_CR register
 SYSCTL_RCGCGPIO_R  EQU 0x400FE608
 	
 TIME_UNIT		   EQU 0x00058BD0  ; number of WAIT cycles for 50ms
+B_TIME_UNIT		   EQU 0x00005000  ; number of B_WAIT cycles for 20us
+B_STAGE_CYCLE	   EQU 0x00000001  ; iterations per breathe stage
 
        IMPORT  TExaS_Init
        THUMB
        AREA    DATA, ALIGN=2
 ;global variables go here
-DUTY_CYCLE SPACE 1	;keeps track of duty cycle %.
-TIME_R RN R2		;keeps #cycles of wait to run
-UNIT_R RN R3		; = TIME_UNIT
+DUTY_CYCLE		SPACE 1				;tracks duty cycle %.
+BREATHE_DUTY	SPACE 1				;(SIGNED) tracks duty cycle in BREATHE mode
+BREATHE_INCR	SPACE 1				;how much BREATHE_DUTY should change by
+	
+TIME_R RN R2						;keeps #cycles of wait to run
+UNIT_R RN R3						; = TIME_UNIT
+B_COUNT RN R12						;how much BREATHE_DUTY changes 
        AREA    |.text|, CODE, READONLY, ALIGN=2
        THUMB
        EXPORT  Start
@@ -58,9 +64,14 @@ Start
  ; TExaS_Init sets bus clock at 80 MHz
      BL  TExaS_Init ; voltmeter, scope on PD3
  
-	;Initialize DUTY_CYCLE to 30%
+	;DUTY_CYCLE = 30%
 	LDR R0, =DUTY_CYCLE
 	MOV R1, #0x03
+	STRB R1, [R0]
+	
+	;BREATH_DUTY = 0
+	LDR R0, =BREATHE_DUTY
+	MOV R1, #0x00
 	STRB R1, [R0]
 	
 	;clock
@@ -92,6 +103,19 @@ Start
 	LDR R1, [R0]
 	AND R1, #0xEF
 	STR R1, [R0]
+	
+	;Unlocks PortF - Credits to Caleb Kovatch
+	LDR R0, =GPIO_LOCK_KEY
+	LDR R1, =GPIO_PORTF_LOCK_R
+	STR R0, [R1]
+	LDR R0, =GPIO_PORTF_CR_R
+	LDR R1, [R0]
+	ORR R1, #0xFF
+	STR R1, [R0]
+	LDR R0, =GPIO_PORTF_PUR_R
+	LDR R1, [R0]
+	ORR R1, #0x10
+	STR R1, [R0]
 
     CPSIE  I    ; TExaS voltmeter, scope runs on interrupts
 	LDR UNIT_R, = TIME_UNIT
@@ -105,7 +129,7 @@ loop
 	
 	;wait time = TIME_UNIT * DUTY_CYCLE
 	LDR TIME_R, =DUTY_CYCLE
-	LDR TIME_R, [TIME_R]
+	LDRB TIME_R, [TIME_R]
 	LDR UNIT_R, =TIME_UNIT
 	MUL TIME_R, TIME_R, UNIT_R
 	BL WAIT
@@ -118,7 +142,7 @@ loop
 	
 	;wait time = TIME_UNIT * (10 - DUTY_CYCLE)
 	LDR TIME_R, =DUTY_CYCLE
-	LDR TIME_R, [TIME_R]
+	LDRB TIME_R, [TIME_R]
 	RSB TIME_R, TIME_R, #0x0A
 	LDR UNIT_R, =TIME_UNIT
 	MUL TIME_R, TIME_R, UNIT_R
@@ -128,36 +152,124 @@ loop
       
 	  
 	;wait for time specified by TIME_R
-	;exits to RELEASED when PE2 is pressed
+	;exits to RELEASE when PE2 is pressed
+	;switch to BREATHE mode when PF4 is pressed
 WAIT
 	LDR R0, =GPIO_PORTE_DATA_R
 	LDR R1, [R0]
 	AND R1, R1, #0x04
 	CMP R1, #0x00
-	BNE RELEASED
+	BNE RELEASE
+	
+	LDR R0, =GPIO_PORTF_DATA_R
+	LDR R1, [R0]
+	AND R1, R1, #0x10
+	CMP R1, #0x00
+	BEQ BREATHE
 	
 	SUBS TIME_R, TIME_R, #0x01
-	BNE WAIT
+	BGT WAIT
+	
 	BX LR
 
-RELEASED
+RELEASE
 	;loop until PE2 is released
-	LDR R1, [R0] ;R0 guaranteed to contain [GPIO_PORTE_DATA_R]
+	LDR R0, =GPIO_PORTE_DATA_R
+	LDR R1, [R0]
 	AND R1, R1, #0x04
 	CMP R1, #0x00
-	BNE RELEASED
+	BNE RELEASE
 	
 	;increment DUTY_CYCLE upon release
 	LDR R0, = DUTY_CYCLE
-	LDR R1, [R0]
-	ADD R1, R1, #2
+	LDRB R1, [R0]
+	ADD R1, R1, #0x02
 	CMP R1, #0x09	;mod 10
 	BLS R_EXIT
 	MOV R1, #0x01
 
 R_EXIT
 	STRB R1, [R0]
-	B loop	;restart
+	B loop	;forced restart, no need to use LR
+	
+;=================================================================;
+BREATHE
+	;Varies brightness of LED periodically until PF4 is released
+	LDR B_COUNT, =B_STAGE_CYCLE
+	
+	LDR R0, =BREATHE_INCR
+	MOV R1, #0x05
+	STR R1, [R0]
+	
+B_LOOP
+	;PE3 on for BREATHE_DUTY * B_TIME_UNIT
+	LDR R0, =GPIO_PORTE_DATA_R
+	LDR R1, [R0]
+	ORR R1, R1, #0x08
+	STR R1, [R0]
+	
+	LDR TIME_R, =BREATHE_DUTY
+	LDRSB TIME_R, [TIME_R]
+	LDR UNIT_R, =B_TIME_UNIT
+	MUL TIME_R, TIME_R, UNIT_R	
+	BL B_WAIT
+	
+	;PE3 off for (100 - BREATHE_DUTY) * B_TIME_UNIT
+	LDR R0, =GPIO_PORTE_DATA_R
+	LDR R1, [R0]
+	AND R1, R1, #0xF7
+	STR R1, [R0]
+	
+	LDR TIME_R, =BREATHE_DUTY
+	LDRSB TIME_R, [TIME_R]
+	RSB TIME_R, TIME_R, #0x64
+	LDR UNIT_R, =B_TIME_UNIT
+	MUL TIME_R, TIME_R, UNIT_R
+	BL B_WAIT
+	
+	;iterate B_COUNT
+	SUBS B_COUNT, B_COUNT, #0x01
+	BGT B_TEST					;if (B_COUNT > 0) B_COUNT--
+	LDR B_COUNT, =B_STAGE_CYCLE	;else B_COUNT reset & change BREATHE_DUTY  			
+	
+	;change BREATHE_DUTY
+	LDR R0, =BREATHE_DUTY
+	LDRSB R1, [R0]
+	LDR R2, =BREATHE_INCR
+	LDRSB R2, [R2]
+	ADD R1, R1, R2
+	STRB R1, [R0]
+	
+	CMP R1, #0x64 			;if (BREATE_DUTY == 0 || == 100) 
+	BGE INVERT_INCR			; INCR * -1
+	CMP R1, #0x00
+	BGT B_TEST
+
+INVERT_INCR
+	LDR R0, =BREATHE_INCR
+	LDRSB R1, [R0]
+	MOV R2, #-1
+	MUL R1,R1, R2
+	STRB R1, [R0]
+
+B_TEST
+	;Test PF4 release once per cycle
+	LDR R0, =GPIO_PORTF_DATA_R
+	LDR R1, [R0]
+	AND R1, R1, #0x10
+	CMP R1, #0x00
+	BNE loop	;force restart to next cycle in "loop"
+	
+	B B_LOOP
+	
+B_WAIT 
+	;Wait for BREATHE mode. No need to push/pop LR due to forced restart
+	SUBS TIME_R, TIME_R, #0x01
+	BGT B_WAIT
+	
+	BX LR
+	
+;=================================================================;
 	
      ALIGN      ; make sure the end of this section is aligned
      END        ; end of file
